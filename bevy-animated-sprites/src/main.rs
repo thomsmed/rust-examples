@@ -1,4 +1,4 @@
-use crate::animated_sprite::{AnimatedSprite, AnimatedSpritePlugin, TextureAtlasIndex};
+use crate::animated_sprite::{AnimatedSpritePlugin, AnimatedSprite, TextureAtlasIndex};
 use bevy::animation::{AnimatedBy, AnimationEvent, AnimationTargetId, animated_field};
 use bevy::color::palettes::basic::GREEN;
 use bevy::prelude::*;
@@ -21,6 +21,7 @@ fn main() -> AppExit {
         ))
         .add_plugins(AnimatedSpritePlugin)
         .add_systems(Startup, setup_camera)
+        .add_systems(Startup, setup_instructions)
         .add_systems(Startup, setup_ground)
         .add_systems(Startup, setup_character)
         .add_systems(FixedUpdate, toggle_animation)
@@ -41,6 +42,20 @@ fn setup_camera(
     ));
 }
 
+fn setup_instructions(
+    mut commands: Commands,
+) {
+    commands.spawn((
+        Text::new("Space: Toggle Sprite Animation\nMouse Pointer: Click and hold on the animating sprite to move it around"),
+        Node {
+            position_type: PositionType::Absolute,
+            top: px(12),
+            left: px(12),
+            ..default()
+        },
+    ));
+}
+
 fn setup_ground(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -50,7 +65,6 @@ fn setup_ground(
         Name::new("Ground"),
         Mesh2d(meshes.add(Rectangle::from_size(Vec2::new(512.0, 2.0)))),
         MeshMaterial2d(materials.add(ColorMaterial::from_color(GREEN))),
-        Transform::from_xyz(0.0, -12.0, 0.0),
     ));
 }
 
@@ -90,6 +104,7 @@ fn setup_character(
             },
         ),
         AnimatedSprite::from_index(initial_section_index),
+        Transform::from_xyz(0.0, 12.0, 0.0),
     ));
 
     // # Character animations
@@ -101,19 +116,19 @@ fn setup_character(
     let mut character_run_animation_clip = AnimationClip::default();
 
     // ### Animate character sprite
-    const CHARACTER_RUN_SECONDS_PER_FRAME: f32 = CHARACTER_RUN_ANIMATION_DURATION / 6.0;
+    const CHARACTER_RUN_ANIMATION_SECONDS_PER_FRAME: f32 = CHARACTER_RUN_ANIMATION_DURATION / 6.0; // 6 sprite frames to animate over
     let character_run_keyframe_curve = AnimatableKeyframeCurve::new([
         (0.0, TextureAtlasIndex::new(1)), // Foot touches ground
-        (CHARACTER_RUN_SECONDS_PER_FRAME * 1.0, TextureAtlasIndex::new(2)),
-        (CHARACTER_RUN_SECONDS_PER_FRAME * 2.0, TextureAtlasIndex::new(3)),
-        (CHARACTER_RUN_SECONDS_PER_FRAME * 3.0, TextureAtlasIndex::new(4)), // Foot touches ground
-        (CHARACTER_RUN_SECONDS_PER_FRAME * 4.0, TextureAtlasIndex::new(5)),
-        (CHARACTER_RUN_SECONDS_PER_FRAME * 5.0, TextureAtlasIndex::new(6)),
+        (CHARACTER_RUN_ANIMATION_SECONDS_PER_FRAME * 1.0, TextureAtlasIndex::new(2)),
+        (CHARACTER_RUN_ANIMATION_SECONDS_PER_FRAME * 2.0, TextureAtlasIndex::new(3)),
+        (CHARACTER_RUN_ANIMATION_SECONDS_PER_FRAME * 3.0, TextureAtlasIndex::new(4)), // Foot touches ground
+        (CHARACTER_RUN_ANIMATION_SECONDS_PER_FRAME * 4.0, TextureAtlasIndex::new(5)),
+        (CHARACTER_RUN_ANIMATION_SECONDS_PER_FRAME * 5.0, TextureAtlasIndex::new(6)),
         (CHARACTER_RUN_ANIMATION_DURATION, TextureAtlasIndex::new(6)),
     ])
     .expect("Should be valid keyframes");
     let character_run_sprite_animation_curve = AnimatableCurve::new(
-        animated_field!(AnimatedSprite::current_index),
+        animated_field!(AnimatedSprite::index),
         character_run_keyframe_curve,
     );
     character_run_animation_clip.add_curve_to_target(
@@ -135,7 +150,7 @@ fn setup_character(
         },
     );
     let character_run_bounce_animation_curve = AnimatableCurve::new(
-        animated_field!(Transform::translation),
+        animated_field!(AnimatedSprite::translation),
         character_run_bounce_curve,
     );
     character_run_animation_clip.add_curve_to_target(
@@ -149,7 +164,7 @@ fn setup_character(
         CharacterStep,
     );
     character_run_animation_clip.add_event(
-        CHARACTER_RUN_SECONDS_PER_FRAME * 3.0, // Matches sprite frame where foot touches ground
+        CHARACTER_RUN_ANIMATION_SECONDS_PER_FRAME * 3.0, // Matches sprite frame where foot touches ground
         CharacterStep,
     );
 
@@ -176,10 +191,38 @@ fn setup_character(
         AnimationPlayer::default(),
         AnimationGraphHandle(graphs.add(character_animation_graph)),
     ));
+
+    // ## Mouse pointer drag events
+    commands.entity(character_entity)
+        .insert((
+            Pickable::default(),
+        ))
+        .observe(on_character_dragged);
 }
 
-fn on_character_step(event: On<CharacterStep>) {
+fn on_character_step(
+    event: On<CharacterStep>,
+) {
     info!("on_character_step");
+}
+
+fn on_character_dragged(
+    event: On<Pointer<Drag>>,
+    mut pickable_entities: Query<&mut Transform, With<Pickable>>,
+    camera: Single<(&Camera, &GlobalTransform)>,
+) {
+    let Ok(mut pickable_entity_transform) = pickable_entities.get_mut(event.entity) else {
+        return;
+    };
+
+    let (camera, camera_global_transform) = *camera;
+
+    let Ok(pointer_position) = camera.viewport_to_world_2d(camera_global_transform, event.pointer_location.position) else {
+        return;
+    };
+
+    pickable_entity_transform.translation.x = pointer_position.x;
+    pickable_entity_transform.translation.y = pointer_position.y;
 }
 
 fn toggle_animation(
