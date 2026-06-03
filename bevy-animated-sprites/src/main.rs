@@ -1,10 +1,30 @@
-use crate::animated_sprite::{AnimatedSpritePlugin, AnimatedSprite, TextureAtlasIndex};
+mod animated_sprite;
+mod particles;
+
 use bevy::animation::{AnimatedBy, AnimationEvent, AnimationTargetId, animated_field};
-use bevy::color::palettes::basic::GREEN;
+use bevy::color::palettes::basic::{GREEN, WHITE};
 use bevy::prelude::*;
 use std::f32::consts::PI;
 
-mod animated_sprite;
+use crate::animated_sprite::{AnimatedSprite, AnimatedSpritePlugin, TextureAtlasIndex};
+use crate::particles::{Particle, ParticlesPlugin, SeededRng};
+
+const CHARACTER_PIXEL_HEIGHT: u32 = 24;
+
+#[derive(Resource)]
+struct DustParticles {
+    mesh: Handle<Mesh>,
+    material: Handle<ColorMaterial>,
+}
+
+impl FromWorld for DustParticles {
+    fn from_world(world: &mut World) -> Self {
+        Self {
+            mesh: world.add_asset::<Mesh>(Circle::new(1.5)),
+            material: world.add_asset::<ColorMaterial>(ColorMaterial::from_color(WHITE)),
+        }
+    }
+}
 
 #[derive(Resource)]
 struct CharacterAnimations {
@@ -20,10 +40,18 @@ fn main() -> AppExit {
             ImagePlugin::default_nearest(), // Makes sprites/images crisp
         ))
         .add_plugins(AnimatedSpritePlugin)
-        .add_systems(Startup, setup_camera)
-        .add_systems(Startup, setup_instructions)
-        .add_systems(Startup, setup_ground)
-        .add_systems(Startup, setup_character)
+        .add_plugins(ParticlesPlugin)
+        .init_resource::<DustParticles>()
+        .add_systems(
+            Startup,
+            (
+                setup_camera,
+                setup_instructions,
+                setup_ground,
+                setup_character,
+            )
+                .chain(),
+        )
         .add_systems(FixedUpdate, toggle_animation)
         .add_observer(on_character_step)
         .run()
@@ -81,7 +109,7 @@ fn setup_character(
 
     let sprite_sheet_num_rows = 1;
     let sprite_sheet_num_columns = 7;
-    let sprite_sheet_section_size = 24;
+    let sprite_sheet_section_size = CHARACTER_PIXEL_HEIGHT;
 
     let texture_handle = asset_server.load("gabe-idle-run.png");
     let texture_atlas_layout = TextureAtlasLayout::from_grid(
@@ -104,7 +132,7 @@ fn setup_character(
             },
         ),
         AnimatedSprite::from_index(initial_section_index),
-        Transform::from_xyz(0.0, 12.0, 0.0),
+        Transform::from_xyz(0.0, (CHARACTER_PIXEL_HEIGHT / 2) as f32, 0.0),
     ));
 
     // # Character animations
@@ -193,45 +221,65 @@ fn setup_character(
     ));
 
     // ## Mouse pointer drag events
-    commands.entity(character_entity)
-        .insert((
-            Pickable::default(),
-        ))
+    commands
+        .entity(character_entity)
+        .insert((Pickable::default(),))
         .observe(on_character_dragged);
 }
 
 fn on_character_step(
     event: On<CharacterStep>,
+    commands: Commands,
+    rng: ResMut<SeededRng>,
+    dust_particles: Res<DustParticles>,
+    characters: Query<&GlobalTransform, With<AnimatedSprite>>,
 ) {
-    info!("on_character_step");
+    let Ok(character_transform) = characters.get(event.trigger().target) else {
+        return;
+    };
+
+    let character_location = character_transform.translation();
+    let particle_spawn_location = Vec3::new(
+        character_location.x,
+        character_location.y - (CHARACTER_PIXEL_HEIGHT / 2) as f32,
+        0.0,
+    );
+
+    Particle::spawn_at(
+        commands,
+        rng,
+        &dust_particles.mesh,
+        &dust_particles.material,
+        particle_spawn_location,
+    )
 }
 
 fn on_character_dragged(
     event: On<Pointer<Drag>>,
-    mut pickable_entities: Query<&mut Transform, With<Pickable>>,
+    mut characters: Query<&mut Transform, (With<Pickable>, With<AnimatedSprite>)>,
     camera: Single<(&Camera, &GlobalTransform)>,
 ) {
-    let Ok(mut pickable_entity_transform) = pickable_entities.get_mut(event.entity) else {
+    let Ok(mut character_transform) = characters.get_mut(event.entity) else {
         return;
     };
 
     let (camera, camera_global_transform) = *camera;
 
-    let Ok(pointer_position) = camera.viewport_to_world_2d(camera_global_transform, event.pointer_location.position) else {
+    let Ok(pointer_position) = camera.viewport_to_world_2d(camera_global_transform, event.pointer_location.position)else {
         return;
     };
 
-    pickable_entity_transform.translation.x = pointer_position.x;
-    pickable_entity_transform.translation.y = pointer_position.y;
+    character_transform.translation.x = pointer_position.x;
+    character_transform.translation.y = pointer_position.y;
 }
 
 fn toggle_animation(
-    animation_players: Query<&mut AnimationPlayer>,
+    character_animation_players: Query<&mut AnimationPlayer, With<AnimatedSprite>>,
     keyboard_input: Res<ButtonInput<KeyCode>>,
     character_animations: Res<CharacterAnimations>,
 ) {
     if keyboard_input.just_pressed(KeyCode::Space) {
-        for mut animation_player in animation_players {
+        for mut animation_player in character_animation_players {
             if animation_player.is_playing_animation(character_animations.run) {
                 animation_player.stop_all();
             } else {
