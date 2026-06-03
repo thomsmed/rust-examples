@@ -114,7 +114,7 @@ fn update_flip(
 }
 
 fn update_transform(
-    sprites: Query<(&mut Transform, &mut AnimatedSprite)>,
+    sprites: Query<(&mut Transform, &mut AnimatedSprite), With<Sprite>>,
 ) {
     for (mut transform,mut animated_sprite) in sprites {
         let inner_animated_sprite = animated_sprite.bypass_change_detection();
